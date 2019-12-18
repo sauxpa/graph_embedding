@@ -38,10 +38,16 @@ def eigenmap_embedding(G, k):
     D = scipy.sparse.diags(L.diagonal())
     eigenvalues, eigenvectors = scipy.sparse.linalg.eigs(L, k=k,  M=D)
 
-    eigenvalues = np.real(eigenvalues)
-    eigenvectors = np.real(eigenvectors)
+    # eigenvalues are in random order coming out of eigs, 
+    # make sure they are now sorted in increasing order.
+    # Also make sure both eigenvalues and eigenvectors 
+    # are real; they should be but there is usually
+    # a small numerical residual imaginary part.
+    idx = eigenvalues.argsort()[::-1]
+    eigenvalues = np.real(eigenvalues[idx])
+    eigenvectors = np.real(eigenvectors[:,idx])
 
-    return eigenvectors
+    return eigenvectors, eigenvalues
 
 def deepwalk_embedding(G, 
                        k, 

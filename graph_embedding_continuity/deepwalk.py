@@ -5,6 +5,7 @@ import torch.nn.functional as F
 import numpy as np
 import networkx as nx
 import scipy
+from tqdm import tqdm
 
 class Model(nn.Module):
 
@@ -108,15 +109,30 @@ class DeepWalk():
         loss.backward()
         self.optimizer_word.step()
         self.optimizer_context.step()
+        
+        return loss.item()
 
     def train(self, walks_per_node):
-        print('Training...')
+        tdqm_dict_keys = ['loss']
+        tdqm_dict = dict(zip(tdqm_dict_keys, [0.0]))
+
         for i in range(walks_per_node):
-            nodes = self.nodes[torch.randperm(self.n)]
-            for node in nodes:
-                path = self.sample_random_walk(node)
-                self.skipgram(path)
-            if (i+1)%self.verbose == 0:
-                print('{}/{}'.format(i+1, walks_per_node))
-        print('...done!')
-            
+            total_loss = 0.0        
+            with tqdm(total=self.n,
+                      unit_scale=True,
+                      postfix={'loss': 0.0},
+                      desc="Epoch : %i/%i" % (i+1, walks_per_node),
+                      ncols=100,
+                      disable=((i+1)%self.verbose != 0 and i != 0 and i != walks_per_node-1),
+                     ) as pbar:
+
+                nodes = self.nodes[torch.randperm(self.n)]
+                for j, node in enumerate(nodes):
+                    path = self.sample_random_walk(node)
+                    loss = self.skipgram(path)
+                    total_loss += loss
+                    
+                    # logging
+                    tdqm_dict['loss'] = total_loss/(j+1)
+                    pbar.set_postfix(tdqm_dict)
+                    pbar.update(1)
