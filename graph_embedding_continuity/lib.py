@@ -2,7 +2,7 @@ import numpy as np
 import scipy
 import networkx as nx
 
-from .deepwalk import DeepWalk
+from .deepwalk import DeepWalk, Node2Vec
 from .graph_kernels import shortest_path_feature_map, graphlet_feature_map
 
 
@@ -67,6 +67,44 @@ def deepwalk_embedding(G,
     
     emb_word = dw.model_word(dw.one_hot).data
     emb_context = dw.model_context(dw.one_hot).data
+        
+    return emb_word, emb_context
+
+def node2vec_embedding(G, 
+                       k,
+                       p=1.0,
+                       q=1.0,
+                       n_train=0,
+                       walk_length=0,
+                       window_size=0,
+                       n_neg=0,
+                       hidden_size=0,
+                       use_cuda=False,
+                      ):
+    """
+    G : nx graph,
+    k: embedding dimension,
+    p, q: float, to control bfs/dfs in node2vec random walks,
+    n_train: number of training iterations of the deepwalk network,
+    walk_length : number of hops in the graph random walk,
+    window_size: radius of the node context.
+    
+    Returns 2 (N,k) torch tensors
+    """
+    node2vec = Node2Vec(G, 
+                        p=p,
+                        q=q,
+                        walk_length=walk_length, 
+                        window_size=window_size,
+                        embedding_size=k,
+                        n_neg=n_neg,
+                        hidden_size=hidden_size,
+                        use_cuda=use_cuda,
+                       )
+    node2vec.train(n_train)
+    
+    emb_word = node2vec.model_word(node2vec.one_hot).data
+    emb_context = node2vec.model_context(node2vec.one_hot).data
         
     return emb_word, emb_context
 

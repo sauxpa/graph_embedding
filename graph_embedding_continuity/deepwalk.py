@@ -1,11 +1,12 @@
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import networkx as nx
 import scipy
+import abc
 from tqdm import tqdm
+
 
 class Model(nn.Module):
 
@@ -19,8 +20,11 @@ class Model(nn.Module):
         out = self.fc2(out)
         return out
 
-
-class DeepWalk():
+    
+class SkipgramModel(abc.ABC):
+    """
+    Base class for skipgram-based models such as Deepwalk or node2vec.
+    """
     def __init__(self,
                  G,
                  walk_length=0,
@@ -68,15 +72,9 @@ class DeepWalk():
         D_inv = scipy.sparse.spdiags(diags_inv, [0], m, n)
         return D_inv.dot(self.A)
 
+    @abc.abstractmethod
     def sample_random_walk(self, node):
-        """Simulate a graph random walk starting from node.
-        """
-        path = torch.LongTensor(size=(self.walk_length,)).to(self.device)
-        path[0] = node
-        for t in range(1, self.walk_length):
-            node = int(np.random.choice(self.G.nodes, p=self.P[node, :].A.flatten()))
-            path[t] = node
-        return path
+        pass
 
     def skipgram(self, path):
         """Run skipgram on the sentence composed of the nodes in path.
@@ -136,3 +134,94 @@ class DeepWalk():
                     tdqm_dict['loss'] = total_loss/(j+1)
                     pbar.set_postfix(tdqm_dict)
                     pbar.update(1)
+
+                    
+class DeepWalk(SkipgramModel):
+    def __init__(self,
+                 G,
+                 walk_length=0,
+                 window_size=0,
+                 embedding_size=0,
+                 n_neg=0,
+                 hidden_size=0,
+                 verbose=10,
+                 use_cuda=False,
+                ):
+        
+        super().__init__(G,
+                         walk_length=walk_length,
+                         window_size=window_size,
+                         embedding_size=embedding_size,
+                         n_neg=n_neg,
+                         hidden_size=hidden_size,
+                         verbose=verbose,
+                         use_cuda=use_cuda,
+                        )
+        
+    def sample_random_walk(self, node):
+        """Simulate a graph random walk starting from node.
+        """
+        path = torch.LongTensor(size=(self.walk_length,)).to(self.device)
+        path[0] = node
+        for t in range(1, self.walk_length):
+            node = int(np.random.choice(self.G.nodes, p=self.P[node, :].A.flatten()))
+            path[t] = node
+        return path
+    
+    
+class Node2Vec(SkipgramModel):
+    def __init__(self,
+                 G,
+                 p=1.0,
+                 q=1.0,
+                 walk_length=0,
+                 window_size=0,
+                 embedding_size=0,
+                 n_neg=0,
+                 hidden_size=0,
+                 verbose=10,
+                 use_cuda=False,
+                ):
+        
+        super().__init__(G,
+                         walk_length=walk_length,
+                         window_size=window_size,
+                         embedding_size=embedding_size,
+                         n_neg=n_neg,
+                         hidden_size=hidden_size,
+                         verbose=verbose,
+                         use_cuda=use_cuda,
+                        )
+    
+        # lower p --> breadth-first sampling
+        self.p = p
+        # lower q --> depth-first sampling
+        self.q = q
+    
+    def sample_random_walk(self, node):
+        """Simulate a graph random walk starting from node.
+        """
+        path = torch.LongTensor(size=(self.walk_length,)).to(self.device)
+        node = node.item()
+        path[0] = node
+        previous = node
+        for t in range(1, self.walk_length):
+            neighbors = list(self.G.neighbors(node))
+            weights = dict(zip(
+                neighbors,
+                [
+                    nx.shortest_path_length(self.G, previous, neighbor) for neighbor in neighbors
+                ]
+            ))
+            
+            proba = self.P[node, :].A.flatten()
+            
+            proba_neighb = [
+                1/self.p * proba[neighb] if weight == 0 else (1/self.q * proba[neighb] if weight == 2 else proba[neighb]) for neighb, weight in weights.items()
+            ]
+            proba_neighb = proba_neighb / np.sum(proba_neighb)
+            
+            node = int(np.random.choice(neighbors, p=proba_neighb))
+            path[t] = node
+            previous = node
+        return path
