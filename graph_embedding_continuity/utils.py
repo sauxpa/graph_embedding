@@ -1,5 +1,6 @@
 import numpy as np
 from copy import deepcopy
+import scipy.sparse as sp
 from scipy.spatial.distance import cdist
 from scipy.optimize import linear_sum_assignment
 
@@ -39,3 +40,29 @@ def wasserstein_metric(alpha, beta):
         
     assignment = linear_sum_assignment(dist_matrix)
     return dist_matrix[assignment].sum() / dist_matrix.shape[0]
+
+
+def normalize_sum_row_sparse(A):
+    """
+    Normalize a scipy.sparse.csr_matrix to have 
+    each row sum to 1.
+    """
+    
+    if not sp.isspmatrix_csr(A):
+        raise ValueError('Input must be a sparse.scipy.csr_matrix.')
+        
+    row_sum = sp.csr_matrix(A.sum(axis=1))
+    row_sum.data = 1/row_sum.data
+
+    row_sum = row_sum.transpose()
+    scaling_matrix = sp.diags(row_sum.toarray()[0])
+
+    return scaling_matrix.dot(A)
+
+
+def cnormalize(A, p=2):
+    """
+    Normalize a matrix A to have columns of unit L^p norm.
+    """
+    norms = np.linalg.norm(A, axis=0, ord=p)
+    return A / norms
