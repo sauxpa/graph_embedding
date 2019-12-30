@@ -84,6 +84,10 @@ def rw_factorization_embedding(G,
     eigenvalues_ = np.real(eigenvalues_[idx])
     eigenvectors_ = np.real(eigenvectors_[:,idx])
     
+    # Collapse the two-step chain.
+    # For instance the first eigenvector corresponds to
+    # the invariant measure of the walk, in this case :
+    # P(W_t=y) = sum_{x} P(W_{t-1}=x, W_t=y)
     eigenvectors = np.empty((G.number_of_nodes(), k))
     for i, node in enumerate(G.nodes):
         idx = [j for j, node_ in enumerate(G_.nodes) if node_[1] == node]
