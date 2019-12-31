@@ -66,3 +66,42 @@ def cnormalize(A, p=2):
     """
     norms = np.linalg.norm(A, axis=0, ord=p)
     return A / norms
+
+
+def expected_removal_loss(G,
+                          emb_func,
+                          dist=wasserstein_metric,
+                          n_samples=-1,
+                         ):
+    """Expected distance between embeddings of the original graph and
+    the graph with one edge removed uniformly at random.
+    G: networkx graph,
+    emb_func: function that takes G as an argument, built as a partial function of 
+        an embedding function,
+    dist: function to compute distance between point clouds embeddings; defaults to 
+        built-in wasserstein metric,
+    n_samples: if -1 (default), average across all possible edges removed; if not,
+        try n_samples edges uniformly at random.
+        
+    Return: average distance.
+    """
+
+    if n_samples == -1:
+        n_samples = G.number_of_edges()
+        edges = G.edges()
+    else:
+        edges_idx = np.random.choice(range(G.number_of_edges()), size=2, replace=False)
+        edges = list(G.edges())
+        edges = [edges[idx] for idx in edges_idx]
+
+    dists = np.empty(n_samples)
+
+    emb = emb_func(G)
+    
+    for i, edge in enumerate(edges):
+        G_removed = deepcopy(G)
+        G_removed.remove_edge(*edge)
+        emb_removed = emb_func(G_removed)
+        dists[i] = wasserstein_metric(emb, emb_removed)
+    
+    return dists.mean()

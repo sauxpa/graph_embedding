@@ -15,13 +15,16 @@ def eigenmap_embedding(G,
                        k,
                        dtype='float64',
                        normalize=False,
+                       use_sparse=True,
                       ):
     """
     G : nx graph,
     k: embedding dimension,
     dtype: scipy.sparse.eigs only supports float dtype,
-    normalize: if True, scale each vector by its L2 norm.
-    
+    normalize: if True, scale each vector by its L2 norm,
+    use_sparse: if True, linear algebra operates on scipy.sparse.csr_matrix,
+        if False, use standard numpy implementation.
+
     Returns (N,k) array of (column) eigenvectors, (N) array of eigenvalues.
     """
     
@@ -31,8 +34,16 @@ def eigenmap_embedding(G,
     # solve generalized eigenvalues problem with degree matrix
     # extract smallest magnitude eigenvalues
     D = sp.diags(L.diagonal())
-    eigenvalues, eigenvectors = sp.linalg.eigs(L, k=k,  M=D, which='SR')
 
+    if use_sparse:
+        eigenvalues, eigenvectors = eigenvalues, eigenvectors = sp.linalg.eigs(L, k=k,  M=D, which='SR')
+    else:
+        # 1) transform to diag matrix to vector
+        # 2) elementwise inverse (fast)
+        # 3) recast into a diagonal matrix
+        D_inv = np.diag(1/np.diag(D.A))
+        eigenvalues, eigenvectors = np.linalg.eig(np.dot(D_inv, L.A))
+        
     # eigenvalues are in random order coming out of eigs, 
     # make sure they are now sorted in increasing order.
     # Also make sure both eigenvalues and eigenvectors 
@@ -42,6 +53,11 @@ def eigenmap_embedding(G,
     eigenvalues = np.real(eigenvalues[idx])
     eigenvectors = np.real(eigenvectors[:,idx])
 
+    if not use_sparse:
+        # sp.linalg.eigs directly extract k eigenvectors,
+        # if using numpy, do it here.
+        eigenvectors = eigenvectors[:, :k]
+        
     if normalize:
         # unit norm
         eigenvectors = cnormalize(eigenvectors)
@@ -57,14 +73,16 @@ def rw_factorization_embedding(G,
                                q=1.0, 
                                dtype='float64', 
                                normalize=False,
+                               use_sparse=True,
                               ):
     """
     G : nx graph,
     k: embedding dimension,
     p, q: bias parameters in node2vec random walks.
     dtype: scipy.sparse.eigs only supports float dtype,
-    normalize: if True, scale each vector by its L2 norm.
-    
+    normalize: if True, scale each vector by its L2 norm,
+    use_sparse: if True, linear algebra operates on scipy.sparse.csr_matrix,
+        if False, use standard numpy implementation.
     Returns (N,k) array of (column) eigenvectors, (N) array of eigenvalues.
     """
     
@@ -73,8 +91,12 @@ def rw_factorization_embedding(G,
     P = rw_2step_transition_matrix(G_=G_).astype(dtype)
     
     # extract eigenvalue 1 (invariant measure) and the largest others.
-    eigenvalues_, eigenvectors_ = sp.linalg.eigs(P.T, k=k, which='LR')
-
+    
+    if use_sparse:
+        eigenvalues_, eigenvectors_ = sp.linalg.eigs(P.T, k=k, which='LR')
+    else:
+        eigenvalues_, eigenvectors_ = np.linalg.eig(P.A.T)
+    
     # eigenvalues are in random order coming out of eigs, 
     # make sure they are now sorted in increasing order.
     # Also make sure both eigenvalues and eigenvectors 
@@ -83,6 +105,11 @@ def rw_factorization_embedding(G,
     idx = eigenvalues_.argsort()[::-1]
     eigenvalues_ = np.real(eigenvalues_[idx])
     eigenvectors_ = np.real(eigenvectors_[:,idx])
+    
+    if not use_sparse:
+        # sp.linalg.eigs directly extract k eigenvectors,
+        # if using numpy, do it here.
+        eigenvectors_ = eigenvectors_[:, :k]
     
     # Collapse the two-step chain.
     # For instance the first eigenvector corresponds to
