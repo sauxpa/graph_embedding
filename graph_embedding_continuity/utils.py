@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from copy import deepcopy
+import scipy
 import scipy.sparse as sp
 from scipy.optimize import linear_sum_assignment
 
