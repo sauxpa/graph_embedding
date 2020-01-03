@@ -1,6 +1,7 @@
 import numpy as np
 import scipy.sparse as sp
 import networkx as nx
+import torch
 
 from .deepwalk import DeepWalk, Node2Vec
 from .graph_kernels import shortest_path_feature_map, graphlet_feature_map
@@ -18,7 +19,7 @@ def eigenmap_embedding(G,
                        use_sparse=True,
                       ):
     """
-    G : nx graph,
+    G : nx.Graph(),
     k: embedding dimension,
     dtype: scipy.sparse.eigs only supports float dtype,
     normalize: if True, scale each vector by its L2 norm,
@@ -59,10 +60,8 @@ def eigenmap_embedding(G,
         eigenvectors = eigenvectors[:, :k]
         
     if normalize:
-        # unit norm
-        eigenvectors = cnormalize(eigenvectors)
-        # same direction
-        eigenvectors *= np.sign(eigenvectors[0])
+        # unit norm and same direction
+        eigenvectors = cnormalize(eigenvectors, same_direction=True)
     
     return eigenvectors, eigenvalues
 
@@ -76,7 +75,7 @@ def rw_factorization_embedding(G,
                                use_sparse=True,
                               ):
     """
-    G : nx graph,
+    G : nx.Graph(),
     k: embedding dimension,
     p, q: bias parameters in node2vec random walks.
     dtype: scipy.sparse.eigs only supports float dtype,
@@ -121,10 +120,8 @@ def rw_factorization_embedding(G,
         eigenvectors[i, :] = np.sum(eigenvectors_[idx, :], axis=0)
     
     if normalize:
-        # unit norm
-        eigenvectors = cnormalize(eigenvectors)
-        # same direction
-        eigenvectors *= np.sign(eigenvectors[0])
+        # unit norm and same direction
+        eigenvectors = cnormalize(eigenvectors, same_direction=True)
         
     return eigenvectors
 
@@ -138,14 +135,22 @@ def deepwalk_embedding(G,
                        hidden_size=0,
                        use_cuda=False,
                        normalize=False,
+                       time_reg_strength=0.0,
+                       cloud_metric_p=2,
+                       prior_emb_word=torch.empty(0),
+                       prior_emb_context=torch.empty(0),
                       ):
     """
-    G : nx graph,
+    G : nx.Graph(),
     k: embedding dimension,
     n_train: number of training iterations of the deepwalk network,
     walk_length : number of hops in the graph random walk,
     window_size: radius of the node context,
     normalize: if True, scale each vector by its L2 norm.
+    time_reg_strength: time dynamic penalty strength,
+    cloud_metric_name: metric used to compare point cloud embeddings,
+    prior_emb_word: prior word embedding,
+    prior_emb_context: prior context embedding.
     
     Returns 2 (N,k) torch tensors
     """
@@ -156,15 +161,20 @@ def deepwalk_embedding(G,
                   n_neg=n_neg,
                   hidden_size=hidden_size,
                   use_cuda=use_cuda,
+                  time_reg_strength=time_reg_strength,
+                  cloud_metric_p=cloud_metric_p,
+                  prior_emb_word=prior_emb_word,
+                  prior_emb_context=prior_emb_context,
                  )
+    
     dw.train(n_train)
     
     emb_word = dw.model_word(dw.one_hot).data
     emb_context = dw.model_context(dw.one_hot).data
         
     if normalize:
-        emb_word = cnormalize(emb_word)
-        emb_context = cnormalize(emb_context)
+        emb_word = cnormalize(emb_word, same_direction=True)
+        emb_context = cnormalize(emb_context, same_direction=True)
         
     return emb_word, emb_context
 
@@ -180,15 +190,23 @@ def node2vec_embedding(G,
                        hidden_size=0,
                        use_cuda=False,
                        normalize=False,
+                       time_reg_strength=0.0,
+                       cloud_metric_p=2,
+                       prior_emb_word=torch.empty(0),
+                       prior_emb_context=torch.empty(0),
                       ):
     """
-    G : nx graph,
+    G : nx.Graph(),
     k: embedding dimension,
     p, q: float, to control bfs/dfs in node2vec random walks,
     n_train: number of training iterations of the deepwalk network,
     walk_length : number of hops in the graph random walk,
     window_size: radius of the node context,
     normalize: if True, scale each vector by its L2 norm.
+    time_reg_strength: time dynamic penalty strength,
+    cloud_metric_name: metric used to compare point cloud embeddings,
+    prior_emb_word: prior word embedding,
+    prior_emb_context: prior context embedding.
     
     Returns 2 (N,k) torch tensors
     """
@@ -201,17 +219,162 @@ def node2vec_embedding(G,
                         n_neg=n_neg,
                         hidden_size=hidden_size,
                         use_cuda=use_cuda,
+                        time_reg_strength=time_reg_strength,
+                        cloud_metric_p=cloud_metric_p,
+                        prior_emb_word=prior_emb_word,
+                        prior_emb_context=prior_emb_context,
                        )
+    
     node2vec.train(n_train)
     
     emb_word = node2vec.model_word(node2vec.one_hot).data
     emb_context = node2vec.model_context(node2vec.one_hot).data
         
     if normalize:
+        emb_word = cnormalize(emb_word, same_direction=True)
+        emb_context = cnormalize(emb_context, same_direction=True)
+        
+    return emb_word, emb_context
+
+
+def deepwalk_embedding_time_reg(Gs,
+                                k,
+                                n_train=0,
+                                walk_length=0,
+                                window_size=0,
+                                n_neg=0,
+                                hidden_size=0,
+                                use_cuda=False,
+                                normalize=False,
+                                time_reg_strength=0.0,
+                                cloud_metric_p=2,
+                               ):
+    """
+    Gs : list of nx.Graph(),
+    k: embedding dimension,
+    n_train: number of training iterations of the deepwalk network,
+    walk_length : number of hops in the graph random walk,
+    window_size: radius of the node context,
+    normalize: if True, scale each vector by its L2 norm,
+    time_reg_strength: time dynamic penalty strength,
+    cloud_metric_name: metric used to compare point cloud embeddings.
+    
+    Returns 2 (N,k) torch tensors
+    """
+    
+    dw = DeepWalk(Gs[0],
+                  walk_length=walk_length, 
+                  window_size=window_size,
+                  embedding_size=k,
+                  n_neg=n_neg,
+                  hidden_size=hidden_size,
+                  use_cuda=use_cuda,
+                  time_reg_strength=time_reg_strength,
+                  cloud_metric_p=cloud_metric_p,
+                 )
+    
+    dw.train(n_train)
+    
+    emb_word = dw.model_word(dw.one_hot).data
+    emb_context = dw.model_context(dw.one_hot).data
+    
+    if normalize:
         emb_word = cnormalize(emb_word)
         emb_context = cnormalize(emb_context)
         
-    return emb_word, emb_context
+    emb_words = [emb_word]
+    emb_contexts = [emb_context]
+    
+    for G in Gs[1:]:
+        dw.G = G
+        dw.prior_emb_word = emb_word
+        dw.prior_emb_context = emb_context
+        
+        dw.train(n_train)
+    
+        emb_word = dw.model_word(dw.one_hot).data
+        emb_context = dw.model_context(dw.one_hot).data
+    
+        if normalize:
+            emb_word = cnormalize(emb_word, same_direction=True)
+            emb_context = cnormalize(emb_context, same_direction=True)
+        
+        emb_words.append(emb_word)
+        emb_contexts.append(emb_context)
+            
+    return emb_words, emb_contexts
+
+
+def node2vec_embedding_time_reg(Gs,
+                                k,
+                                p=1.0,
+                                q=1.0,
+                                n_train=0,
+                                walk_length=0,
+                                window_size=0,
+                                n_neg=0,
+                                hidden_size=0,
+                                use_cuda=False,
+                                normalize=False,
+                                time_reg_strength=0.0,
+                                cloud_metric_p=2,
+                               ):
+    """
+    Gs : list of nx.Graph(),
+    k: embedding dimension,
+    n_train: number of training iterations of the deepwalk network,
+    walk_length : number of hops in the graph random walk,
+    window_size: radius of the node context,
+    normalize: if True, scale each vector by its L2 norm,
+    time_reg_strength: time dynamic penalty strength,
+    cloud_metric_name: metric used to compare point cloud embeddings.
+    
+    Returns 2 (N,k) torch tensors
+    """
+    
+    node2vec = Node2Vec(Gs[0],
+                        p=p,
+                        q=q,
+                        walk_length=walk_length, 
+                        window_size=window_size,
+                        embedding_size=k,
+                        n_neg=n_neg,
+                        hidden_size=hidden_size,
+                        use_cuda=use_cuda,
+                        time_reg_strength=time_reg_strength,
+                        cloud_metric_p=cloud_metric_p,
+                       )
+    
+    node2vec.train(n_train)
+    
+    emb_word = node2vec.model_word(node2vec.one_hot).data
+    emb_context = node2vec.model_context(node2vec.one_hot).data
+    
+    if normalize:
+        emb_word = cnormalize(emb_word)
+        emb_context = cnormalize(emb_context)
+        
+    emb_words = [emb_word]
+    emb_contexts = [emb_context]
+    
+    for G in Gs[1:]:
+        node2vec.G = G
+        node2vec.prior_emb_word = emb_word
+        node2vec.prior_emb_context = emb_context
+        
+        node2vec.train(n_train)
+    
+        emb_word = node2vec.model_word(node2vec.one_hot).data
+        emb_context = node2vec.model_context(node2vec.one_hot).data
+    
+        if normalize:
+            emb_word = cnormalize(emb_word, same_direction=True)
+            emb_context = cnormalize(emb_context, same_direction=True)
+        
+        emb_words.append(emb_word)
+        emb_contexts.append(emb_context)
+            
+    return emb_words, emb_contexts
 
 
 ###############################

@@ -1,7 +1,7 @@
 import numpy as np
+import torch
 from copy import deepcopy
 import scipy.sparse as sp
-from scipy.spatial.distance import cdist
 from scipy.optimize import linear_sum_assignment
 
 
@@ -31,12 +31,15 @@ def wasserstein_metric(alpha, beta):
         n: number of points in the cloud,
         d: dimension of the cloud.
     """
-    
     if len(alpha.shape) == 1:
         # cdist needs inputs of shape of length 2
-        dist_matrix = cdist(alpha.reshape(-1,1), beta.reshape(-1,1), metric='euclidean')
+        alpha = alpha.reshape(-1,1)
+        beta = beta.reshape(-1,1)
+        
+    if isinstance(alpha, torch.Tensor) and isinstance(beta, torch.Tensor):
+        dist_matrix = torch.cdist(alpha, beta, p=2)
     else:
-        dist_matrix = cdist(alpha, beta, metric='euclidean')
+        dist_matrix = scipy.spatial.distance.cdist(alpha, beta, metric='euclidean')
         
     assignment = linear_sum_assignment(dist_matrix)
     return dist_matrix[assignment].sum() / dist_matrix.shape[0]
@@ -60,17 +63,20 @@ def normalize_sum_row_sparse(A):
     return scaling_matrix.dot(A)
 
 
-def cnormalize(A, p=2):
+def cnormalize(A, p=2, same_direction=False):
     """
     Normalize a matrix A to have columns of unit L^p norm.
     """
-    norms = np.linalg.norm(A, axis=0, ord=p)
-    return A / norms
+    A /= np.linalg.norm(A, axis=0, ord=p)
+    if same_direction:
+        A *= np.sign([0])
+
+    return A
 
 
 def expected_removal_loss(G,
                           emb_func,
-                          dist=wasserstein_metric,
+                          cloud_metric=wasserstein_metric,
                           n_samples=-1,
                          ):
     """Expected distance between embeddings of the original graph and
@@ -78,7 +84,7 @@ def expected_removal_loss(G,
     G: networkx graph,
     emb_func: function that takes G as an argument, built as a partial function of 
         an embedding function,
-    dist: function to compute distance between point clouds embeddings; defaults to 
+    cloud_metric: function to compute distance between point cloud embeddings; defaults to 
         built-in wasserstein metric,
     n_samples: if -1 (default), average across all possible edges removed; if not,
         try n_samples edges uniformly at random.
@@ -102,6 +108,6 @@ def expected_removal_loss(G,
         G_removed = deepcopy(G)
         G_removed.remove_edge(*edge)
         emb_removed = emb_func(G_removed)
-        dists[i] = wasserstein_metric(emb, emb_removed)
+        dists[i] = cloud_metric(emb, emb_removed)
     
     return dists.mean()

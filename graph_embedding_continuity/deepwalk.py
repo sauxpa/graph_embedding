@@ -7,6 +7,7 @@ import scipy
 import abc
 from tqdm import tqdm
 
+from .utils import wasserstein_metric
 
 class Model(nn.Module):
 
@@ -34,6 +35,10 @@ class SkipgramModel(abc.ABC):
                  hidden_size=0,
                  verbose=10,
                  use_cuda=False,
+                 time_reg_strength=0.0,
+                 cloud_metric_p=2,
+                 prior_emb_word=torch.empty(0),
+                 prior_emb_context=torch.empty(0),
                 ):
         self.G = G
         self.walk_length = walk_length
@@ -58,6 +63,14 @@ class SkipgramModel(abc.ABC):
         self.optimizer_word = torch.optim.Adam(self.model_word.parameters(), lr=0.001)
         self.optimizer_context = torch.optim.Adam(self.model_context.parameters(), lr=0.001)
 
+        # strength of the embedding time evolution penalty
+        self.time_reg_strength = time_reg_strength
+        # L^p metric used to regularize embeddings
+        self.cloud_metric_p = cloud_metric_p
+        # prior embedding for time regularization
+        self.prior_emb_word = prior_emb_word
+        self.prior_emb_context = prior_emb_context
+        
         # when to print in the training loop
         self.verbose = verbose
 
@@ -72,22 +85,31 @@ class SkipgramModel(abc.ABC):
         D_inv = scipy.sparse.spdiags(diags_inv, [0], m, n)
         return D_inv.dot(self.A)
 
+    def cloud_metric(self, x, y):
+        """ Function to compute distance between point cloud embeddings.
+        """
+        return torch.norm(y-x, self.cloud_metric_p)
+        
     @abc.abstractmethod
     def sample_random_walk(self, node):
         pass
-
-    def skipgram(self, path):
-        """Run skipgram on the sentence composed of the nodes in path.
+        
+    @property
+    def do_time_reg(self):
+        return len(self.prior_emb_word) and len(self.prior_emb_context)
+    
+    def skipgram(self):
+        """
+        Run skipgram on the sentence composed of the nodes in self.path.
         """
         losses = []
-        for j, u in enumerate(path):
+        for j, u in enumerate(self.path):
             self.frequencies[u] += 1
             u_emb = self.model_word.forward(self.one_hot[u])
-            window = path[max(j-self.window_size, 0): min(j+self.window_size, self.walk_length-1)]
+            window = self.path[max(j-self.window_size, 0): min(j+self.window_size, self.walk_length-1)]
             for v in window:
                 v_emb = self.model_context.forward(self.one_hot[v])
                 losses.append(-torch.log(self.sigmoid(torch.dot(u_emb, v_emb))))
-                del v_emb
             
             neg_distr = self.frequencies ** 0.75
             neg_distr = neg_distr / np.sum(neg_distr)
@@ -96,11 +118,29 @@ class SkipgramModel(abc.ABC):
             for v in negative_samples:
                 v_emb = self.model_context.forward(self.one_hot[v])
                 losses.append(-torch.log(self.sigmoid(-torch.dot(u_emb, v_emb))))
-                del v_emb
             
-            del u_emb
-
         loss = torch.sum(torch.stack(losses))
+        return loss
+        
+    def loss(self):
+        """
+        Loss manager:
+            * compute skipgram loss from current self.path,
+            * can add embedding time regularization.
+        """
+        
+        skipgram_loss = self.skipgram()
+        
+        if self.do_time_reg:
+            # add time regularization only if prior embeddings are available
+            time_reg_loss = self.time_reg_strength * (
+                self.cloud_metric(self.model_word(self.one_hot), self.prior_emb_word) +
+                self.cloud_metric(self.model_context(self.one_hot), self.prior_emb_context)
+            )
+        else:
+            time_reg_loss = torch.tensor(0.0).to(self.device)
+            
+        loss = skipgram_loss + time_reg_loss
         
         self.optimizer_word.zero_grad()
         self.optimizer_context.zero_grad()
@@ -108,17 +148,28 @@ class SkipgramModel(abc.ABC):
         self.optimizer_word.step()
         self.optimizer_context.step()
         
-        return loss.item()
-
+        return skipgram_loss.item(), time_reg_loss.item()
+        
     def train(self, walks_per_node):
-        tdqm_dict_keys = ['loss']
-        tdqm_dict = dict(zip(tdqm_dict_keys, [0.0]))
+        if self.do_time_reg:
+            tdqm_dict_keys = ['skipgram loss', 'time dynamic loss']
+            tdqm_dict = dict(zip(tdqm_dict_keys, [0.0, 0.0]))
+            postfix = {'skipgram loss': 0.0, 'time dynamic loss': 0.0}
+        else:
+            tdqm_dict_keys = ['loss']
+            tdqm_dict = dict(zip(tdqm_dict_keys, [0.0]))
+            postfix = {'loss': 0.0}
 
         for i in range(walks_per_node):
-            total_loss = 0.0        
+            if self.do_time_reg:
+                total_skipgram_loss = 0.0
+                total_time_reg_loss = 0.0
+            else:
+                total_loss = 0.0
+
             with tqdm(total=self.n,
                       unit_scale=True,
-                      postfix={'loss': 0.0},
+                      postfix=postfix,
                       desc="Epoch : %i/%i" % (i+1, walks_per_node),
                       ncols=100,
                       disable=((i+1)%self.verbose != 0 and i != 0 and i != walks_per_node-1),
@@ -126,12 +177,20 @@ class SkipgramModel(abc.ABC):
 
                 nodes = self.nodes[torch.randperm(self.n)]
                 for j, node in enumerate(nodes):
-                    path = self.sample_random_walk(node)
-                    loss = self.skipgram(path)
-                    total_loss += loss
+                    self.path = self.sample_random_walk(node)
+                    skipgram_loss, time_reg_loss = self.loss()
                     
                     # logging
-                    tdqm_dict['loss'] = total_loss/(j+1)
+                    if self.do_time_reg:
+                        total_skipgram_loss += skipgram_loss
+                        total_time_reg_loss += time_reg_loss
+                        
+                        tdqm_dict['skipgram loss'] = total_skipgram_loss/(j+1)
+                        tdqm_dict['time dynamic loss'] = total_time_reg_loss/(j+1)
+                    else:
+                        total_loss += skipgram_loss
+                        tdqm_dict['loss'] = total_loss/(j+1)
+                    
                     pbar.set_postfix(tdqm_dict)
                     pbar.update(1)
 
@@ -146,6 +205,10 @@ class DeepWalk(SkipgramModel):
                  hidden_size=0,
                  verbose=10,
                  use_cuda=False,
+                 time_reg_strength=0.0,
+                 cloud_metric_p=2,
+                 prior_emb_word=torch.empty(0),
+                 prior_emb_context=torch.empty(0),
                 ):
         
         super().__init__(G,
@@ -156,6 +219,10 @@ class DeepWalk(SkipgramModel):
                          hidden_size=hidden_size,
                          verbose=verbose,
                          use_cuda=use_cuda,
+                         time_reg_strength=time_reg_strength,
+                         cloud_metric_p=cloud_metric_p,
+                         prior_emb_word=prior_emb_word,
+                         prior_emb_context=prior_emb_context,
                         )
         
     def sample_random_walk(self, node):
@@ -181,6 +248,10 @@ class Node2Vec(SkipgramModel):
                  hidden_size=0,
                  verbose=10,
                  use_cuda=False,
+                 time_reg_strength=0.0,
+                 cloud_metric_p=2,
+                 prior_emb_word=torch.empty(0),
+                 prior_emb_context=torch.empty(0),
                 ):
         
         super().__init__(G,
@@ -191,6 +262,10 @@ class Node2Vec(SkipgramModel):
                          hidden_size=hidden_size,
                          verbose=verbose,
                          use_cuda=use_cuda,
+                         time_reg_strength=time_reg_strength,
+                         cloud_metric_p=cloud_metric_p,
+                         prior_emb_word=prior_emb_word,
+                         prior_emb_context=prior_emb_context,
                         )
     
         # lower p --> breadth-first sampling
