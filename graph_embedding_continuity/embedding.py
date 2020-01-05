@@ -16,7 +16,7 @@ def eigenmap_embedding(G,
                        k,
                        dtype='float64',
                        normalize=False,
-                       use_sparse=True,
+                       use_sparse=False,
                       ):
     """
     G : nx.Graph(),
@@ -72,7 +72,7 @@ def rw_factorization_embedding(G,
                                q=1.0, 
                                dtype='float64', 
                                normalize=False,
-                               use_sparse=True,
+                               use_sparse=False,
                               ):
     """
     G : nx.Graph(),

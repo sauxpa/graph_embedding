@@ -96,7 +96,7 @@ class SkipgramModel(abc.ABC):
         
     @property
     def do_time_reg(self):
-        return len(self.prior_emb_word) and len(self.prior_emb_context)
+        return len(self.prior_emb_word) and len(self.prior_emb_context) and self.time_reg_strength > 0
     
     def skipgram(self):
         """
