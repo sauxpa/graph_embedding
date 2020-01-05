@@ -70,7 +70,9 @@ def cnormalize(A, p=2, same_direction=False):
     """
     A /= np.linalg.norm(A, axis=0, ord=p)
     if same_direction:
-        A *= np.sign(A[0])
+        orientation = np.sign(A[0])
+        orientation[np.where(orientation == 0.0)] = 1.0
+        A *= orientation
 
     return A
 
