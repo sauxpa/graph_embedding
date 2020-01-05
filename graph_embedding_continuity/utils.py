@@ -68,6 +68,9 @@ def cnormalize(A, p=2, same_direction=False):
     """
     Normalize a matrix A to have columns of unit L^p norm.
     """
+    if isinstance(A, torch.Tensor):
+        A = A.cpu().detach().numpy()
+        
     A /= np.linalg.norm(A, axis=0, ord=p)
     if same_direction:
         orientation = np.sign(A[0])
