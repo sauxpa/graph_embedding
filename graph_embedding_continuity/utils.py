@@ -84,6 +84,7 @@ def expected_removal_loss(G,
                           emb_func,
                           cloud_metric=wasserstein_metric,
                           n_samples=-1,
+                          return_all=False,
                          ):
     """Expected distance between embeddings of the original graph and
     the graph with one edge removed uniformly at random.
@@ -93,8 +94,8 @@ def expected_removal_loss(G,
     cloud_metric: function to compute distance between point cloud embeddings; defaults to 
         built-in wasserstein metric,
     n_samples: if -1 (default), average across all possible edges removed; if not,
-        try n_samples edges uniformly at random.
-        
+        try n_samples edges uniformly at random,
+    return_all: if True, return all removal loss, else return the average.
     Return: average distance.
     """
 
@@ -116,4 +117,7 @@ def expected_removal_loss(G,
         emb_removed = emb_func(G_removed)
         dists[i] = cloud_metric(emb, emb_removed)
     
-    return dists.mean()
+    if return_all:
+        return dists
+    else:
+        return dists.mean()
